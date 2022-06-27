@@ -4,6 +4,7 @@
 模型使用IEEE14结点测试系统 数据来源: https://labs.ece.uw.edu/pstca/pf14/pg_tca14bus.htm
 编写时考虑了代码灵活性，如果想要改变模型参数和结点关系，可在注释有符号"%"处修改
 Designed by Zhixuan Ge, CAU
+Github: https://github.com/CallofFood/Load-Flow-Calculation-by-Decoupling-Method
 */
 
 //通过标准库std::complex实现复数运算
@@ -16,50 +17,45 @@ Designed by Zhixuan Ge, CAU
 #define complexd complex<double>    //对复数类进行宏定义方便编写
 #define epsilon 1e-6                //收敛判定条件设为10^(-6)
 
-using namespace std;                //设定命名空间
+
 using namespace Eigen;
+using namespace std;                //设定命名空间
 
 void Shrink(VectorXd& V, VectorXi& Vseq);               //向量维度缩减函数
 void Restore(VectorXd& V, VectorXi& Vseq, int n);       //向量维度恢复函数
+void CmpOut(complexd c);                                //格式化输出复数
 
 int main()
 {
     int NumNode = 14;//输入结点数    %
+    int NumLine = 20;//路线数        %
 
-    //建立并初始化结点导纳矩阵  %
-    MatrixXd G = MatrixXd::Constant(NumNode, NumNode, 0), B = MatrixXd::Constant(NumNode, NumNode, 0);
-    G(0, 0) = 5.94327, G(0, 1) = G(1, 0) = -4.99913, G(0, 4) = G(4, 0) = -0.94414;
-    G(1, 1) = 9.52132, G(1, 2) = G(2, 1) = -1.13502, G(1, 3) = G(3, 1) = -1.68603, G(1, 4) = G(4, 1) = -1.70114;
-    G(2, 2) = 3.12099, G(2, 3) = G(3, 2) = -1.98598;
-    G(3, 3) = 10.51299, G(3, 4) = G(4, 3) = -6.84098;
-    G(4, 4) = 9.48626;
-    G(5, 5) = 8.1748, G(5, 10) = G(10, 5) = -1.95503, G(5, 11) = G(11, 5) = -3.12084, G(5, 12) = G(12, 5) = -3.09893;
-    G(8, 8) = 5.32606, G(8, 9) = G(9, 8) = -3.90205, G(8, 13) = G(13, 8) = -1.42401;
-    G(9, 9) = 5.78293, G(9, 10) = G(10, 9) = -1.88088;
-    G(10, 10) = 3.83591;
-    G(11, 11) = 5.60986, G(11, 12) = G(12, 11) = -2.48902;
-    G(12, 12) = 6.72495, G(12, 13) = G(13, 12) = -1.13699;
-    G(13, 13) = 2.561;
+    //初始化路线参数 %
+    VectorXi linehead(NumLine), linetail(NumLine);              //线路两端对应结点
+    VectorXd Gline(NumLine), Ghead(NumLine), Gtail(NumLine);    //线路导纳和两端对地导纳
+    VectorXd Bline(NumLine), Bhead(NumLine), Btail(NumLine);
+    VectorXd GnodeN(14), BnodeN(14);                            //结点对地导纳
 
-    B(0, 0) = -19.2843, B(0, 1) = B(1, 0) = 15.26309, B(0, 4) = B(4, 0) = 4.07221;
-    B(1, 1) = -30.27072, B(1, 2) = B(2, 1) = 4.78186, B(1, 3) = B(3, 1) = 5.11584, B(1, 4) = B(4, 1) = 5.19393;
-    B(2, 2) = -9.81148, B(2, 3) = B(3, 2) = 5.06882;
-    B(3, 3) = -38.63517, B(3, 4) = B(4, 3) = 21.57855, B(3, 6) = B(6, 3) = 4.88951, B(3, 8) = B(8, 3) = 1.8555;
-    B(4, 4) = -35.36477, B(4, 5) = B(5, 4) = 4.25754;
-    B(5, 5) = -18.12098, B(5, 10) = B(10, 5) = 4.09407, B(5, 11) = B(11, 5) = 3.95651, B(5, 12) = B(12, 5) = 6.10276;
-    B(6, 6) = -19.549, B(6, 7) = B(7, 6) = 5.67698, B(6, 8) = B(8, 6) = 9.09008;
-    B(7, 7) = -5.67698;
-    B(8, 8) = -24.09251, B(8, 9) = B(9, 8) = 10.36539, B(8, 13) = B(13, 8) = 3.02905;
-    B(9, 9) = -14.76834, B(9, 10) = B(10, 9) = 4.40294;
-    B(10, 10) = -8.49702;
-    B(11, 11) = -6.20819, B(11, 12) = B(12, 11) = 2.25197;
-    B(12, 12) = -10.66969, B(12, 13) = B(13, 12) = 2.31496;
-    B(13, 13) = -5.34401;
+    linehead << 1, 2, 2, 1, 2, 3, 4, 7, 7, 9, 6, 6, 6, 9, 10, 12, 13, 5, 4, 4;
+    linetail << 2, 3, 4, 5, 5, 4, 5, 8, 9, 10, 11, 12, 13, 14, 11, 13, 14, 6, 7, 9;
+    linehead = linehead.array() - 1;
+    linetail = linetail.array() - 1;
 
-    MatrixXcd Y = G + complexd(0, 1) * B;
+    Gline << 4.99913, 1.13502, 1.68603, 0.94414, 1.70114, 1.98598, 6.84098, 0.00000, 0.00000, 3.90205, 1.95503, 3.12084, 3.09893, 1.42401, 1.88088, 2.48902, 1.13699, 0.00000, 0.00000, 0.00000;
+    Ghead = Gtail = VectorXd::Constant(20, 0);
+
+    Bline << -15.26309, -4.78186, -5.11584, -4.07221, -5.19393, -5.06882, -21.57855, -5.67698, -9.09008, -10.36539, -4.09407, -3.95621, -6.10276, -3.02905, -4.40294, -2.25197, -2.31496, -4.25745, -4.88951, -1.85550;
+    Bhead = Btail = VectorXd::Constant(20, 0);
+    Bhead.head(7) << 0.0264, 0.0219, 0.0187, 0.0246, 0.017, 0.0173, 0.0064;
+    Bhead.tail(3) << -0.31063, -0.10999, -0.05936;
+    Btail.head(7) << 0.0264, 0.0219, 0.0187, 0.0246, 0.017, 0.0173, 0.0064;
+    Btail.tail(3) << 0.28951, 0.10757, 0.05752;
+
+    GnodeN = BnodeN = VectorXd::Constant(NumNode, 0);
+    BnodeN(8) = 0.19;
     //
     
-    //记录各结点数量并初始化结点列表   %
+    //初始化结点分类参数   %
     int  NumNodePV = 4, NumNodePQ = 9;
     int  NumNodeNotR = NumNode - 1, NumNodeR = 1;
     VectorXi NodeR(NumNodeR), NodePV(NumNodePV), NodePQ(NumNodePQ), NodeNotR(NumNode - 1);
@@ -69,7 +65,7 @@ int main()
     NodeNotR << 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13;
     //
     
-    //记录各结点电压并初始化   %
+    //初始化结点电压参数   %
     VectorXd P(NumNode), Q(NumNode);
     VectorXd  U = VectorXd::Constant(NumNode, 1), delta = VectorXd::Constant(NumNode, 0);
     P << 2.324, 0.183, -0.942, -0.478, -0.076, -0.112, 0, 0, -0.295, -0.09, -0.035, -0.061, -0.135, -0.149;
@@ -79,6 +75,33 @@ int main()
     U(2) = 1.01;
     U(5) = 1.07;
     U(7) = 1.09;
+    //
+
+    //由路线参数生成结点电压矩阵
+    MatrixXcd Yline = Gline + complexd(0, 1) * Bline;
+    MatrixXcd Yhead = Ghead + complexd(0, 1) * Bhead;
+    MatrixXcd Ytail = Gtail + complexd(0, 1) * Btail;
+    MatrixXcd YnodeN = GnodeN + complexd(0, 1) * BnodeN;
+
+    MatrixXd  B(NumNode, NumNode), G(NumNode, NumNode);
+    MatrixXcd Y(NumNode, NumNode);
+    Y = B = G = MatrixXd::Constant(NumNode, NumNode, 0);
+
+
+    for (int i = 0; i < NumLine; i++)
+    {
+        Y(linehead(i), linetail(i)) = Y(linetail(i), linehead(i)) = -Yline(i);
+        Y(linehead(i), linehead(i)) += (Yline(i) + Yhead(i));
+        Y(linetail(i), linetail(i)) += (Yline(i) + Ytail(i));
+    }
+
+    for (int i = 0; i < NumNode; i++)
+    {
+        Y(i, i) += YnodeN(i);
+    }
+
+    G = Y.array().real();
+    B = Y.array().imag();
     //
     
 
@@ -175,15 +198,44 @@ int main()
         Shrink(dQ, NodePQ);     //因此收敛判断前删去相关结点对应元素
         if (dP.array().abs().maxCoeff() < epsilon && dQ.array().abs().maxCoeff() < epsilon && dU.array().abs().maxCoeff() < epsilon)
         {
-            cout << "迭代次数: " << i + 1 << endl << "精度: " << epsilon << "\n" << endl;    //输出迭代次数
+            cout << "Iteration Ordinal Number: " << i + 1 << endl << "Accuracy: " << epsilon << "\n" << endl;    //输出迭代次数
             break;
         }
         //
     }
 
-    //输出结果
+    //输出迭代结果
     cout << "U: " << endl << U << "\n" << endl;                           //输出U
     cout << "delta: " << endl << delta / 3.1415926 * 180 << "\n" << endl;     //以角度形式输出δ和δ
+    //
+
+    //计算复功率
+    VectorXcd Uph = U.array() * delta.array().cos() + complexd(0, 1) * U.array() * delta.array().sin();
+    MatrixXcd S(NumLine,3);
+    for (int i = 0; i < NumLine; i++)
+    {
+        S(i, 0) = Uph(linehead(i)) * conj(Uph(linehead(i)) * Yhead(i) + (Uph(linehead(i)) - Uph(linetail(i))) * Yline(i));
+        S(i, 1) = Uph(linetail(i)) * conj(Uph(linetail(i)) * Ytail(i) + (Uph(linetail(i)) - Uph(linehead(i))) * Yline(i));
+    }
+    S.col(2) = S.col(0) + S.col(1);
+
+    //输出复功率
+    for (int i = 0; i < NumLine; i++)
+    {
+        cout << "head: " << linehead(i) + 1 << ", tail: " << linetail(i) + 1 << ", S = ";
+        CmpOut(S(i, 0));
+        cout << endl;
+        
+        cout << "head: " << linetail(i) + 1 << ", tail: " << linehead(i) + 1 << ", S = ";
+        CmpOut(S(i, 1));
+        cout << endl;
+
+        cout << "head: " << linehead(i) + 1 << ", tail: " << linetail(i) + 1 << ", dS = ";
+        CmpOut(S(i, 2));
+        cout << endl;
+        cout << "\n";
+    }
+    //cout << S;
 
     return 0;
 }
@@ -206,4 +258,21 @@ void Restore(VectorXd& V, VectorXi& Vseq, int n)
     for (int i = 0; i < size; i++)
         tempV(Vseq(i)) = V(i);
     V = tempV;
+}
+
+void CmpOut(complexd c)
+{
+    string PorN;
+    double cImag;
+    if (c.imag() > 0)
+    {
+        PorN = " + ";
+        cImag = c.imag();
+    }
+    else
+    {
+        PorN = " - ";
+        cImag = -c.imag();
+    }
+    cout << c.real() << PorN << "j" << cImag;
 }
